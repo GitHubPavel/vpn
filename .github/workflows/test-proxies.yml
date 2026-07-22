@@ -1,0 +1,37 @@
+name: Test VPN Proxies
+
+# Запускается вручную — кнопкой "Run workflow" (в вебе или в приложении GitHub Mobile)
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install xray-core
+        run: |
+          curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          mkdir -p xray-bin
+          unzip -o xray.zip -d xray-bin
+          chmod +x xray-bin/xray
+
+      - name: Install Python dependencies
+        run: pip install "requests[socks]"
+
+      - name: Run proxy tests
+        run: python proxy_tester.py configs.txt --xray "$(pwd)/xray-bin/xray" --out results.csv
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: results.csv
+          retention-days: 7
