@@ -27,7 +27,9 @@ jobs:
         run: pip install "requests[socks]"
 
       - name: Run proxy tests
-        run: python proxy_tester.py configs.txt --xray "$(pwd)/xray-bin/xray" --out results.csv
+        env:
+          SUB_URL: https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt
+        run: python proxy_tester.py --sub-url "$SUB_URL" --xray "$(pwd)/xray-bin/xray" --out results.csv --workers 20
 
       - name: Upload results
         uses: actions/upload-artifact@v4
