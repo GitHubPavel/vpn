@@ -34,6 +34,7 @@ import base64
 import csv
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -237,8 +238,19 @@ def build_config(outbound, socks_port):
     }
 
 
+def extract_name(uri):
+    """Достаёт человекочитаемое имя (remark) из ссылки — то же, что видно в V2Box."""
+    frag = up.urlparse(uri).fragment
+    if frag:
+        try:
+            return up.unquote(frag)
+        except Exception:
+            return frag
+    return ""
+
+
 def test_one(uri, xray_path, targets):
-    result = {"uri": uri[:70], "error": ""}
+    result = {"uri": uri[:70], "name": extract_name(uri), "error": ""}
     outbound = None
     try:
         outbound = parse_uri(uri)
@@ -306,6 +318,32 @@ def test_one(uri, xray_path, targets):
     return result
 
 
+def _latency(value):
+    """Извлекает число секунд из строки вида 'OK 200 (0.81s)'. Возвращает inf, если не удалось."""
+    if not value:
+        return float("inf")
+    m = re.search(r"\(([\d.]+)s\)", value)
+    return float(m.group(1)) if m else float("inf")
+
+
+def sort_key(row):
+    claude_ok = str(row.get("claude", "")).startswith("OK")
+    chatgpt_ok = str(row.get("chatgpt", "")).startswith("OK")
+    ip_ok = str(row.get("ip_check", "")).startswith("OK")
+
+    if claude_ok and chatgpt_ok:
+        rank = 0
+    elif claude_ok or chatgpt_ok:
+        rank = 1
+    elif ip_ok:
+        rank = 2
+    else:
+        rank = 3
+
+    avg_latency = min(_latency(row.get("claude", "")), _latency(row.get("chatgpt", "")))
+    return (rank, avg_latency)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Тестирование списка VPN-конфигов через xray-core")
     ap.add_argument("configs_file", nargs="?", help="Файл со списком ссылок (по одной на строку)")
@@ -343,14 +381,19 @@ def main():
                 done_count[0] += 1
                 print(f"[{done_count[0]}/{len(lines)}] готово")
 
-    fieldnames = ["uri", "external_ip", "ip_check", "claude", "chatgpt", "error"]
+    rows.sort(key=sort_key)
+
+    fieldnames = ["name", "uri", "external_ip", "ip_check", "claude", "chatgpt", "error"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
             writer.writerow({k: r.get(k, "") for k in fieldnames})
 
-    print(f"\nГотово. Результаты в {args.out}")
+    print(f"\nГотово. Результаты в {args.out} (отсортированы: рабочие и быстрые — вверху)")
+
+
+
 
 
 if __name__ == "__main__":
