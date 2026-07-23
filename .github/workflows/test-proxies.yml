@@ -31,6 +31,9 @@ jobs:
           SUB_URL: https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt
         run: python proxy_tester.py --sub-url "$SUB_URL" --xray "$(pwd)/xray-bin/xray" --out results.csv --workers 20
 
+      - name: Write summary
+        run: python generate_summary.py results.csv >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
