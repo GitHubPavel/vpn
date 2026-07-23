@@ -54,10 +54,11 @@ DEFAULT_TARGETS = {
     "ip_check": "https://api.ipify.org?format=json",
     "claude": "https://claude.ai",
     "chatgpt": "https://chat.openai.com",
+    "gemini": "https://gemini.google.com",
 }
 
-TIMEOUT = 7          # сек. на каждый HTTP-запрос через прокси
-STARTUP_WAIT = 1.5   # сек. на старт xray перед тестами
+TIMEOUT = 5          # сек. на каждый HTTP-запрос через прокси
+STARTUP_WAIT = 1.2   # сек. на старт xray перед тестами
 
 
 def find_free_port():
@@ -287,7 +288,8 @@ def test_one(uri, xray_path, targets):
             "https": f"socks5h://127.0.0.1:{port}",
         }
 
-        for name, url in targets.items():
+        target_names = list(targets.keys())
+        for idx, (name, url) in enumerate(targets.items()):
             t0 = time.time()
             try:
                 r = requests.get(url, proxies=proxies, timeout=TIMEOUT)
@@ -300,8 +302,16 @@ def test_one(uri, xray_path, targets):
                         result["external_ip"] = ""
             except requests.exceptions.Timeout:
                 result[name] = "TIMEOUT"
+                if name == "ip_check":
+                    for skip_name in target_names[idx + 1:]:
+                        result[skip_name] = "SKIP"
+                    break
             except Exception as e:
                 result[name] = f"FAIL ({type(e).__name__})"
+                if name == "ip_check":
+                    for skip_name in target_names[idx + 1:]:
+                        result[skip_name] = "SKIP"
+                    break
 
     finally:
         if proc is not None:
@@ -329,19 +339,26 @@ def _latency(value):
 def sort_key(row):
     claude_ok = str(row.get("claude", "")).startswith("OK")
     chatgpt_ok = str(row.get("chatgpt", "")).startswith("OK")
+    gemini_ok = str(row.get("gemini", "")).startswith("OK")
     ip_ok = str(row.get("ip_check", "")).startswith("OK")
 
-    if claude_ok and chatgpt_ok:
+    ok_count = sum([claude_ok, chatgpt_ok, gemini_ok])
+
+    if ok_count == 3:
         rank = 0
-    elif claude_ok or chatgpt_ok:
+    elif ok_count > 0:
         rank = 1
     elif ip_ok:
         rank = 2
     else:
         rank = 3
 
-    avg_latency = min(_latency(row.get("claude", "")), _latency(row.get("chatgpt", "")))
-    return (rank, avg_latency)
+    avg_latency = min(
+        _latency(row.get("claude", "")),
+        _latency(row.get("chatgpt", "")),
+        _latency(row.get("gemini", "")),
+    )
+    return (rank, -ok_count, avg_latency)
 
 
 def main():
@@ -383,7 +400,7 @@ def main():
 
     rows.sort(key=sort_key)
 
-    fieldnames = ["name", "uri", "external_ip", "ip_check", "claude", "chatgpt", "error"]
+    fieldnames = ["name", "uri", "external_ip", "ip_check", "claude", "chatgpt", "gemini", "error"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
