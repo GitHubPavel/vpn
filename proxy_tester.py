@@ -13,12 +13,17 @@ proxy_tester.py
      https://github.com/XTLS/Xray-core/releases  -> файл Xray-windows-64.zip
      Распаковать, взять xray.exe.
   2. pip install requests[socks]
-  3. Собрать все ваши ссылки конфигов (vless://..., ss://..., trojan://...)
-     в текстовый файл configs.txt, по одной ссылке на строку.
-     (В V2Box: на каждом конфиге нажать "поделиться"/copy link, вставить в файл)
+  3. Список конфигов можно взять двумя способами:
+     а) файлом configs.txt (по одной ссылке vless://.../ss://.../trojan:// на строку)
+     б) напрямую по ссылке подписки через --sub-url (тот же URL, что и в V2Box
+        в настройках группы подписки) — тогда список всегда свежий, руками
+        обновлять не нужно.
 
-Запуск:
+Запуск (файл):
   python proxy_tester.py configs.txt --xray "C:\\path\\to\\xray.exe"
+
+Запуск (по ссылке подписки):
+  python proxy_tester.py --sub-url "https://.../sub" --xray "C:\\path\\to\\xray.exe"
 
 Результат: results.csv с колонками — статус по каждому конфигу,
 внешний IP через прокси, доступность claude.ai и chat.openai.com, задержка.
@@ -33,6 +38,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import urllib.parse as up
 
@@ -179,6 +186,31 @@ def parse_trojan(uri):
     return outbound
 
 
+def fetch_subscription(url):
+    """
+    Скачивает содержимое подписки (как это делает V2Box) и возвращает список
+    строк-конфигов. Поддерживает как обычный текст (по ссылке на строку),
+    так и весь блок, закодированный целиком в base64 (стандартный формат
+    подписок V2rayNG/Shadowrocket/V2Box).
+    """
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    text = r.text.strip()
+
+    known_schemes = ("vless://", "ss://", "trojan://", "vmess://")
+
+    if any(scheme in text for scheme in known_schemes):
+        raw = text
+    else:
+        try:
+            raw = base64.b64decode(b64_fix(text)).decode("utf-8", errors="ignore")
+        except Exception:
+            raw = text
+
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    return lines
+
+
 def parse_uri(uri):
     uri = uri.strip()
     if not uri:
@@ -276,24 +308,40 @@ def test_one(uri, xray_path, targets):
 
 def main():
     ap = argparse.ArgumentParser(description="Тестирование списка VPN-конфигов через xray-core")
-    ap.add_argument("configs_file", help="Файл со списком ссылок (по одной на строку)")
-    ap.add_argument("--xray", required=True, help="Путь к xray.exe")
+    ap.add_argument("configs_file", nargs="?", help="Файл со списком ссылок (по одной на строку)")
+    ap.add_argument("--sub-url", help="Ссылка на подписку — конфиги будут скачаны напрямую (без файла)")
+    ap.add_argument("--xray", required=True, help="Путь к xray.exe / xray")
     ap.add_argument("--out", default="results.csv", help="Файл с результатами")
+    ap.add_argument("--workers", type=int, default=12, help="Сколько конфигов проверять параллельно (по умолчанию 12)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.xray):
         print(f"Не найден xray по пути: {args.xray}")
         sys.exit(1)
 
-    with open(args.configs_file, "r", encoding="utf-8") as f:
-        lines = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+    if args.sub_url:
+        print("Скачиваю подписку...")
+        lines = fetch_subscription(args.sub_url)
+    elif args.configs_file:
+        with open(args.configs_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+    else:
+        print("Нужно указать либо configs_file, либо --sub-url")
+        sys.exit(1)
 
-    print(f"Найдено конфигов: {len(lines)}")
+    print(f"Найдено конфигов: {len(lines)}. Проверяю параллельно ({args.workers} потоков)...")
     rows = []
-    for i, uri in enumerate(lines, 1):
-        print(f"[{i}/{len(lines)}] тестирую...")
-        res = test_one(uri, args.xray, DEFAULT_TARGETS)
-        rows.append(res)
+    done_count = [0]
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(test_one, uri, args.xray, DEFAULT_TARGETS): uri for uri in lines}
+        for fut in as_completed(futures):
+            res = fut.result()
+            rows.append(res)
+            with lock:
+                done_count[0] += 1
+                print(f"[{done_count[0]}/{len(lines)}] готово")
 
     fieldnames = ["uri", "external_ip", "ip_check", "claude", "chatgpt", "error"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
