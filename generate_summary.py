@@ -17,8 +17,8 @@ with open(path, encoding="utf-8") as f:
     rows = list(csv.DictReader(f))
 
 print(f"### Результаты проверки — {len(rows)} конфигов (топ {min(top_n, len(rows))}, рабочие и быстрые — вверху)\n")
-print("| Имя | IP | Репутация IP | Claude | ChatGPT | Gemini |")
-print("|---|---|---|---|---|---|")
+print("| Имя | IP | Репутация IP | Claude | ChatGPT | Gemini | Повторно |")
+print("|---|---|---|---|---|---|---|")
 
 for r in rows[:top_n]:
     name = (r.get("name") or "—")[:40].replace("|", "/")
@@ -27,4 +27,5 @@ for r in rows[:top_n]:
     claude = r.get("claude") or r.get("error") or "—"
     chatgpt = r.get("chatgpt") or "—"
     gemini = r.get("gemini") or "—"
-    print(f"| {name} | {ip} | {reputation} | {claude} | {chatgpt} | {gemini} |")
+    recheck = r.get("recheck") or "—"
+    print(f"| {name} | {ip} | {reputation} | {claude} | {chatgpt} | {gemini} | {recheck} |")

@@ -409,7 +409,7 @@ def check_service(browser, socks_port, url, block_phrases):
 
 
 def test_one(uri, xray_path, targets):
-    result = {"uri": uri[:70], "name": extract_name(uri), "error": ""}
+    result = {"uri": uri[:70], "_full_uri": uri, "name": extract_name(uri), "error": ""}
     outbound = None
     try:
         outbound = parse_uri(uri)
@@ -539,6 +539,7 @@ def main():
     ap.add_argument("--xray", required=True, help="Путь к xray.exe / xray")
     ap.add_argument("--out", default="results.csv", help="Файл с результатами")
     ap.add_argument("--workers", type=int, default=10, help="Сколько конфигов проверять параллельно (по умолчанию 10 — каждый поток держит свой Chromium)")
+    ap.add_argument("--recheck", type=int, default=20, help="Сколько лучших кандидатов перепроверять повторно перед выдачей результата (по умолчанию 20, 0 — отключить)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.xray):
@@ -573,7 +574,39 @@ def main():
 
     rows.sort(key=sort_key)
 
-    fieldnames = ["name", "uri", "external_ip", "ip_check", "ip_reputation", "claude", "chatgpt", "gemini", "error"]
+    # Повторная проверка топ-кандидатов: у бесплатных публичных серверов часто
+    # ограничение на число одновременных подключений, и сервер, ответивший
+    # секунду назад, может уже быть занят другими пользователями этого же
+    # источника. Перепроверяем лучшие результаты второй раз, чтобы в топе
+    # оказались только те, кто выжил дважды подряд.
+    recheck_n = min(args.recheck, len(rows))
+    candidates = [r for r in rows[:recheck_n * 3] if sort_key(r)[0] <= 1][:recheck_n]
+
+    if candidates:
+        print(f"\nПовторно проверяю топ-{len(candidates)} кандидатов (двойное подтверждение)...")
+        by_uri = {r["_full_uri"]: r for r in candidates}
+
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {pool.submit(test_one, uri, args.xray, DEFAULT_TARGETS): uri for uri in by_uri}
+            for fut in as_completed(futures):
+                uri = futures[fut]
+                second = fut.result()
+                first = by_uri[uri]
+                still_ok = sort_key(second)[0] <= 1
+                first["recheck"] = "подтверждён" if still_ok else "не подтверждён (умер за это время)"
+
+        shutdown_browsers()
+
+    for r in rows:
+        r.setdefault("recheck", "не проверялся повторно")
+
+    def final_key(row):
+        recheck_rank = 0 if row.get("recheck") == "подтверждён" else (1 if row.get("recheck", "").startswith("не проверялся") else 2)
+        return (recheck_rank,) + sort_key(row)
+
+    rows.sort(key=final_key)
+
+    fieldnames = ["name", "uri", "external_ip", "ip_check", "ip_reputation", "claude", "chatgpt", "gemini", "recheck", "error"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
