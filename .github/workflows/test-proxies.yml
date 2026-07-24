@@ -32,7 +32,7 @@ jobs:
       - name: Run proxy tests
         env:
           SUB_URL: https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt
-        run: python proxy_tester.py --sub-url "$SUB_URL" --xray "$(pwd)/xray-bin/xray" --out results.csv --workers 8
+        run: python proxy_tester.py --sub-url "$SUB_URL" --xray "$(pwd)/xray-bin/xray" --out results.csv --workers 10
 
       - name: Write summary
         run: python generate_summary.py results.csv >> "$GITHUB_STEP_SUMMARY"
