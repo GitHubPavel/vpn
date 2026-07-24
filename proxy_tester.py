@@ -20,11 +20,16 @@ proxy_tester.py
         в настройках группы подписки) — тогда список всегда свежий, руками
         обновлять не нужно.
 
-Проверка теперь идёт в два шага:
+Проверка идёт в три шага:
   1. Быстрый HTTP-запрос — отсеивает мёртвые серверы (без браузера).
-  2. Для живых серверов — реальный Chromium через прокси, проверка итогового
-     отрендеренного текста страницы на фразы блокировки (ловит и сетевые
-     блокировки, и блокировки через JS-попап после загрузки, как у Gemini).
+  2. Проверка репутации внешнего IP через proxycheck.io (бесплатно, без ключа) —
+     помечен ли IP как VPN/датацентр. Именно по этому признаку Google обычно
+     блокирует Gemini (независимо от страны и без входа в аккаунт мы не можем
+     поймать реальную блокировку иначе — она срабатывает только у залогиненного
+     пользователя при отправке сообщения).
+  3. Для живых серверов — реальный Chromium через прокси для claude.ai и
+     chat.openai.com: проверка итогового отрендеренного текста страницы на
+     фразы блокировки (это ловится надёжно даже анонимно, без входа).
 
 Запуск (файл):
   python proxy_tester.py configs.txt --xray "C:\\path\\to\\xray.exe"
@@ -32,9 +37,9 @@ proxy_tester.py
 Запуск (по ссылке подписки):
   python proxy_tester.py --sub-url "https://.../sub" --xray "C:\\path\\to\\xray.exe"
 
-Результат: results.csv с колонками — статус по каждому конфигу,
-внешний IP через прокси, реальная доступность claude.ai / chat.openai.com /
-gemini.google.com (OK / BLOCKED / TIMEOUT / FAIL), задержка.
+Результат: results.csv с колонками — статус по каждому конфигу, внешний IP,
+репутация IP (чистый / VPN-датацентр), реальная доступность claude.ai и
+chat.openai.com (OK / BLOCKED / TIMEOUT / FAIL), эвристика по Gemini.
 """
 
 import argparse
@@ -68,14 +73,18 @@ DEFAULT_TARGETS = {
     "ip_check": "https://api.ipify.org?format=json",
     "claude": "https://claude.ai",
     "chatgpt": "https://chat.openai.com",
-    "gemini": "https://gemini.google.com",
 }
 
-# Проверенные фразы, которыми claude.ai / chat.openai.com / gemini.google.com
-# сообщают о региональной блокировке (собраны из официальных страниц/документации).
-# Проверка идёт по итоговому отрендеренному тексту страницы (после JS), а не
-# только по коду HTTP-ответа — так ловятся блокировки, которые показываются
-# всплывающим окном уже после загрузки приложения (как у Gemini).
+# gemini.google.com проверяется отдельно, через репутацию IP (см. IP_REPUTATION_URL) —
+# блокировка по стране у Gemini срабатывает только у залогиненного аккаунта при
+# отправке сообщения, поэтому анонимная проверка браузером её не ловит и вводит
+# в заблуждение (показывает "доступно", хотя реально нет).
+IP_REPUTATION_URL = "http://proxycheck.io/v2/{ip}?vpn=1&asn=0"
+
+# Проверенные фразы, которыми claude.ai / chat.openai.com сообщают о региональной
+# блокировке (собраны из официальных страниц/документации). Проверка идёт по
+# итоговому отрендеренному тексту страницы (после JS), а не только по коду
+# HTTP-ответа.
 BLOCK_PHRASES = {
     "claude": [
         "only available in certain regions",
@@ -87,17 +96,10 @@ BLOCK_PHRASES = {
         "not available in your country",
         "is not available in your country",
     ],
-    "gemini": [
-        "недоступен в этой стране",
-        "isn't available in this country",
-        "is not available in this country",
-        "isn't currently supported in your country",
-        "not available in your country",
-    ],
 }
 
-PAGE_LOAD_TIMEOUT_MS = 15000   # таймаут навигации в браузере
-POST_LOAD_WAIT_MS = 3500       # доп. ожидание, чтобы JS успел показать блок-попап (важно для Gemini)
+PAGE_LOAD_TIMEOUT_MS = 12000   # таймаут навигации в браузере
+POST_LOAD_WAIT_MS = 1500       # доп. ожидание, чтобы JS успел отрисовать блок-страницу
 
 TIMEOUT = 5          # сек. на быструю первичную HTTP-проверку (ip_check)
 STARTUP_WAIT = 1.2   # сек. на старт xray перед тестами
@@ -281,6 +283,42 @@ def build_config(outbound, socks_port):
     }
 
 
+_ip_reputation_cache = {}
+_ip_reputation_lock = threading.Lock()
+
+
+def check_ip_reputation(ip):
+    """
+    Проверяет через proxycheck.io, помечен ли IP как VPN/датацентр/прокси.
+    Именно по такой репутации IP многие сервисы (в т.ч. Google) блокируют
+    доступ независимо от страны. Результат кэшируется — если несколько
+    конфигов ведут на один и тот же сервер (один IP), проверяем один раз.
+    """
+    if not ip:
+        return "unknown"
+
+    with _ip_reputation_lock:
+        if ip in _ip_reputation_cache:
+            return _ip_reputation_cache[ip]
+
+    try:
+        r = requests.get(IP_REPUTATION_URL.format(ip=ip), timeout=8)
+        data = r.json()
+        info = data.get(ip, {})
+        is_proxy = info.get("proxy") == "yes"
+        ip_type = info.get("type", "")
+        if is_proxy:
+            result = f"VPN/датацентр ({ip_type})" if ip_type else "VPN/датацентр"
+        else:
+            result = f"чистый ({ip_type})" if ip_type else "чистый"
+    except Exception:
+        result = "unknown"
+
+    with _ip_reputation_lock:
+        _ip_reputation_cache[ip] = result
+    return result
+
+
 def extract_name(uri):
     """Достаёт человекочитаемое имя (remark) из ссылки — то же, что видно в V2Box."""
     frag = up.urlparse(uri).fragment
@@ -428,9 +466,19 @@ def test_one(uri, xray_path, targets):
             for name in targets:
                 if name != "ip_check":
                     result[name] = "SKIP"
+            result["ip_reputation"] = "SKIP"
+            result["gemini"] = "SKIP"
             return result
 
-        # Шаг 2: сервер живой — проверяем реальную доступность сервисов через браузер.
+        # Шаг 2: репутация IP (для Gemini — блокировка по стране у него ловится
+        # только у залогиненного аккаунта, поэтому вместо анонимной проверки
+        # смотрим, не помечен ли сам IP как VPN/датацентр).
+        result["ip_reputation"] = check_ip_reputation(result.get("external_ip", ""))
+        result["gemini"] = (
+            "вероятно OK" if result["ip_reputation"].startswith("чистый") else "вероятно BLOCKED"
+        )
+
+        # Шаг 3: сервер живой — проверяем реальную доступность сервисов через браузер.
         browser = get_browser()
         for name, url in targets.items():
             if name == "ip_check":
@@ -463,7 +511,7 @@ def _latency(value):
 def sort_key(row):
     claude_ok = str(row.get("claude", "")).startswith("OK")
     chatgpt_ok = str(row.get("chatgpt", "")).startswith("OK")
-    gemini_ok = str(row.get("gemini", "")).startswith("OK")
+    gemini_ok = str(row.get("gemini", "")) == "вероятно OK"
     ip_ok = str(row.get("ip_check", "")).startswith("OK")
 
     ok_count = sum([claude_ok, chatgpt_ok, gemini_ok])
@@ -480,7 +528,6 @@ def sort_key(row):
     avg_latency = min(
         _latency(row.get("claude", "")),
         _latency(row.get("chatgpt", "")),
-        _latency(row.get("gemini", "")),
     )
     return (rank, -ok_count, avg_latency)
 
@@ -491,7 +538,7 @@ def main():
     ap.add_argument("--sub-url", help="Ссылка на подписку — конфиги будут скачаны напрямую (без файла)")
     ap.add_argument("--xray", required=True, help="Путь к xray.exe / xray")
     ap.add_argument("--out", default="results.csv", help="Файл с результатами")
-    ap.add_argument("--workers", type=int, default=8, help="Сколько конфигов проверять параллельно (по умолчанию 8 — каждый поток держит свой Chromium)")
+    ap.add_argument("--workers", type=int, default=10, help="Сколько конфигов проверять параллельно (по умолчанию 10 — каждый поток держит свой Chromium)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.xray):
@@ -526,7 +573,7 @@ def main():
 
     rows.sort(key=sort_key)
 
-    fieldnames = ["name", "uri", "external_ip", "ip_check", "claude", "chatgpt", "gemini", "error"]
+    fieldnames = ["name", "uri", "external_ip", "ip_check", "ip_reputation", "claude", "chatgpt", "gemini", "error"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
