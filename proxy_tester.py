@@ -12,12 +12,19 @@ proxy_tester.py
   1. Скачать xray-core (ядро, на котором работает V2Box) для Windows:
      https://github.com/XTLS/Xray-core/releases  -> файл Xray-windows-64.zip
      Распаковать, взять xray.exe.
-  2. pip install requests[socks]
+  2. pip install requests[socks] playwright
+     playwright install chromium
   3. Список конфигов можно взять двумя способами:
      а) файлом configs.txt (по одной ссылке vless://.../ss://.../trojan:// на строку)
      б) напрямую по ссылке подписки через --sub-url (тот же URL, что и в V2Box
         в настройках группы подписки) — тогда список всегда свежий, руками
         обновлять не нужно.
+
+Проверка теперь идёт в два шага:
+  1. Быстрый HTTP-запрос — отсеивает мёртвые серверы (без браузера).
+  2. Для живых серверов — реальный Chromium через прокси, проверка итогового
+     отрендеренного текста страницы на фразы блокировки (ловит и сетевые
+     блокировки, и блокировки через JS-попап после загрузки, как у Gemini).
 
 Запуск (файл):
   python proxy_tester.py configs.txt --xray "C:\\path\\to\\xray.exe"
@@ -26,7 +33,8 @@ proxy_tester.py
   python proxy_tester.py --sub-url "https://.../sub" --xray "C:\\path\\to\\xray.exe"
 
 Результат: results.csv с колонками — статус по каждому конфигу,
-внешний IP через прокси, доступность claude.ai и chat.openai.com, задержка.
+внешний IP через прокси, реальная доступность claude.ai / chat.openai.com /
+gemini.google.com (OK / BLOCKED / TIMEOUT / FAIL), задержка.
 """
 
 import argparse
@@ -50,6 +58,12 @@ except ImportError:
     print("Нужен пакет requests с поддержкой socks: pip install requests[socks]")
     sys.exit(1)
 
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("Нужен пакет playwright: pip install playwright && playwright install chromium")
+    sys.exit(1)
+
 DEFAULT_TARGETS = {
     "ip_check": "https://api.ipify.org?format=json",
     "claude": "https://claude.ai",
@@ -57,7 +71,35 @@ DEFAULT_TARGETS = {
     "gemini": "https://gemini.google.com",
 }
 
-TIMEOUT = 5          # сек. на каждый HTTP-запрос через прокси
+# Проверенные фразы, которыми claude.ai / chat.openai.com / gemini.google.com
+# сообщают о региональной блокировке (собраны из официальных страниц/документации).
+# Проверка идёт по итоговому отрендеренному тексту страницы (после JS), а не
+# только по коду HTTP-ответа — так ловятся блокировки, которые показываются
+# всплывающим окном уже после загрузки приложения (как у Gemini).
+BLOCK_PHRASES = {
+    "claude": [
+        "only available in certain regions",
+        "app unavailable",
+        "not available in your region",
+        "not available in your country",
+    ],
+    "chatgpt": [
+        "not available in your country",
+        "is not available in your country",
+    ],
+    "gemini": [
+        "недоступен в этой стране",
+        "isn't available in this country",
+        "is not available in this country",
+        "isn't currently supported in your country",
+        "not available in your country",
+    ],
+}
+
+PAGE_LOAD_TIMEOUT_MS = 15000   # таймаут навигации в браузере
+POST_LOAD_WAIT_MS = 3500       # доп. ожидание, чтобы JS успел показать блок-попап (важно для Gemini)
+
+TIMEOUT = 5          # сек. на быструю первичную HTTP-проверку (ip_check)
 STARTUP_WAIT = 1.2   # сек. на старт xray перед тестами
 
 
@@ -250,6 +292,84 @@ def extract_name(uri):
     return ""
 
 
+_thread_local = threading.local()
+_all_browsers = []
+_browsers_lock = threading.Lock()
+
+
+def get_browser():
+    """
+    Возвращает Chromium-браузер для текущего потока, создавая его один раз
+    на поток (а не на каждый конфиг) — так дороже всего (запуск Chromium)
+    происходит один раз, а не сотни раз.
+    """
+    if not hasattr(_thread_local, "browser"):
+        _thread_local.pw = sync_playwright().start()
+        _thread_local.browser = _thread_local.pw.chromium.launch(headless=True)
+        with _browsers_lock:
+            _all_browsers.append((_thread_local.pw, _thread_local.browser))
+    return _thread_local.browser
+
+
+def shutdown_browsers():
+    """Закрывает все Chromium-браузеры, поднятые потоками, и останавливает Playwright."""
+    with _browsers_lock:
+        for pw, browser in _all_browsers:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            try:
+                pw.stop()
+            except Exception:
+                pass
+        _all_browsers.clear()
+
+
+def check_service(browser, socks_port, url, block_phrases):
+    """
+    Открывает url через реальный Chromium (с прокси через xray) и проверяет
+    итоговый ОТРЕНДЕРЕННЫЙ текст страницы на фразы блокировки — это ловит
+    и блокировки на уровне сети, и блокировки, которые сайт показывает уже
+    после загрузки через JS (как всплывающее окно у Gemini).
+    """
+    t0 = time.time()
+    context = None
+    try:
+        context = browser.new_context(
+            proxy={"server": f"socks5://127.0.0.1:{socks_port}"},
+            ignore_https_errors=True,
+        )
+        page = context.new_page()
+        resp = page.goto(url, timeout=PAGE_LOAD_TIMEOUT_MS, wait_until="domcontentloaded")
+        page.wait_for_timeout(POST_LOAD_WAIT_MS)
+
+        status = resp.status if resp else "?"
+        try:
+            body_text = page.inner_text("body").lower()
+        except Exception:
+            body_text = ""
+
+        dt = round(time.time() - t0, 2)
+
+        if any(phrase in body_text for phrase in block_phrases):
+            return f"BLOCKED {status} ({dt}s)"
+        return f"OK {status} ({dt}s)"
+
+    except Exception as e:
+        dt = round(time.time() - t0, 2)
+        err_name = type(e).__name__
+        if "Timeout" in err_name:
+            return "TIMEOUT"
+        return f"FAIL ({err_name})"
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
+
+
 def test_one(uri, xray_path, targets):
     result = {"uri": uri[:70], "name": extract_name(uri), "error": ""}
     outbound = None
@@ -288,30 +408,34 @@ def test_one(uri, xray_path, targets):
             "https": f"socks5h://127.0.0.1:{port}",
         }
 
-        target_names = list(targets.keys())
-        for idx, (name, url) in enumerate(targets.items()):
-            t0 = time.time()
+        # Шаг 1: быстрая проверка базовой доступности (без браузера) —
+        # если сервер вообще не отвечает, нет смысла тратить время на Chromium.
+        t0 = time.time()
+        try:
+            r = requests.get(DEFAULT_TARGETS["ip_check"], proxies=proxies, timeout=TIMEOUT)
+            dt = round(time.time() - t0, 2)
+            result["ip_check"] = f"OK {r.status_code} ({dt}s)"
             try:
-                r = requests.get(url, proxies=proxies, timeout=TIMEOUT)
-                dt = round(time.time() - t0, 2)
-                result[name] = f"OK {r.status_code} ({dt}s)"
-                if name == "ip_check":
-                    try:
-                        result["external_ip"] = r.json().get("ip", "")
-                    except Exception:
-                        result["external_ip"] = ""
-            except requests.exceptions.Timeout:
-                result[name] = "TIMEOUT"
-                if name == "ip_check":
-                    for skip_name in target_names[idx + 1:]:
-                        result[skip_name] = "SKIP"
-                    break
-            except Exception as e:
-                result[name] = f"FAIL ({type(e).__name__})"
-                if name == "ip_check":
-                    for skip_name in target_names[idx + 1:]:
-                        result[skip_name] = "SKIP"
-                    break
+                result["external_ip"] = r.json().get("ip", "")
+            except Exception:
+                result["external_ip"] = ""
+        except requests.exceptions.Timeout:
+            result["ip_check"] = "TIMEOUT"
+        except Exception as e:
+            result["ip_check"] = f"FAIL ({type(e).__name__})"
+
+        if not str(result["ip_check"]).startswith("OK"):
+            for name in targets:
+                if name != "ip_check":
+                    result[name] = "SKIP"
+            return result
+
+        # Шаг 2: сервер живой — проверяем реальную доступность сервисов через браузер.
+        browser = get_browser()
+        for name, url in targets.items():
+            if name == "ip_check":
+                continue
+            result[name] = check_service(browser, port, url, BLOCK_PHRASES.get(name, []))
 
     finally:
         if proc is not None:
@@ -367,7 +491,7 @@ def main():
     ap.add_argument("--sub-url", help="Ссылка на подписку — конфиги будут скачаны напрямую (без файла)")
     ap.add_argument("--xray", required=True, help="Путь к xray.exe / xray")
     ap.add_argument("--out", default="results.csv", help="Файл с результатами")
-    ap.add_argument("--workers", type=int, default=12, help="Сколько конфигов проверять параллельно (по умолчанию 12)")
+    ap.add_argument("--workers", type=int, default=8, help="Сколько конфигов проверять параллельно (по умолчанию 8 — каждый поток держит свой Chromium)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.xray):
@@ -397,6 +521,8 @@ def main():
             with lock:
                 done_count[0] += 1
                 print(f"[{done_count[0]}/{len(lines)}] готово")
+
+    shutdown_browsers()
 
     rows.sort(key=sort_key)
 
