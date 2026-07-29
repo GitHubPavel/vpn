@@ -98,11 +98,27 @@ BLOCK_PHRASES = {
     ],
 }
 
-PAGE_LOAD_TIMEOUT_MS = 12000   # таймаут навигации в браузере
-POST_LOAD_WAIT_MS = 1500       # доп. ожидание, чтобы JS успел отрисовать блок-страницу
+PAGE_LOAD_TIMEOUT_MS = 9000    # таймаут навигации в браузере
+POST_LOAD_WAIT_MS = 900        # доп. ожидание, чтобы JS успел отрисовать блок-страницу
 
-TIMEOUT = 5          # сек. на быструю первичную HTTP-проверку (ip_check)
-STARTUP_WAIT = 1.2   # сек. на старт xray перед тестами
+TIMEOUT = 4          # сек. на быструю первичную HTTP-проверку (ip_check)
+STARTUP_WAIT_MAX = 3.0   # сек. — верхний предел ожидания старта xray (опрос порта, обычно быстрее)
+
+
+def wait_port_ready(port, timeout=STARTUP_WAIT_MAX):
+    """
+    Опрашивает локальный порт вместо фиксированной паузы — как только xray
+    поднял SOCKS-listener, продолжаем сразу, не дожидаясь STARTUP_WAIT_MAX
+    впустую. Возвращает True, как только порт стал принимать соединения.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
 
 
 def find_free_port():
@@ -473,7 +489,9 @@ def test_one(uri, xray_path, targets):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(STARTUP_WAIT)
+        if not wait_port_ready(port):
+            result["error"] = "xray не поднял порт вовремя"
+            return result
 
         if proc.poll() is not None:
             result["error"] = "xray не запустился (проверьте конфиг/параметры)"
