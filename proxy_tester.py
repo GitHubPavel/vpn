@@ -79,7 +79,7 @@ DEFAULT_TARGETS = {
 # блокировка по стране у Gemini срабатывает только у залогиненного аккаунта при
 # отправке сообщения, поэтому анонимная проверка браузером её не ловит и вводит
 # в заблуждение (показывает "доступно", хотя реально нет).
-IP_REPUTATION_URL = "http://proxycheck.io/v2/{ip}?vpn=1&asn=0"
+IP_REPUTATION_URL = "http://proxycheck.io/v2/{ip}?vpn=1&asn=1&risk=1"
 
 # Проверенные фразы, которыми claude.ai / chat.openai.com сообщают о региональной
 # блокировке (собраны из официальных страниц/документации). Проверка идёт по
@@ -289,13 +289,14 @@ _ip_reputation_lock = threading.Lock()
 
 def check_ip_reputation(ip):
     """
-    Проверяет через proxycheck.io, помечен ли IP как VPN/датацентр/прокси.
-    Именно по такой репутации IP многие сервисы (в т.ч. Google) блокируют
-    доступ независимо от страны. Результат кэшируется — если несколько
-    конфигов ведут на один и тот же сервер (один IP), проверяем один раз.
+    Проверяет через proxycheck.io: помечен ли IP как VPN/датацентр, в какой
+    стране он реально находится по базе Google/proxycheck (а не по названию
+    из подписки, которое может быть неверным для wireless/мобильных IP), и
+    risk-score по истории злоупотреблений. Результат кэшируется по IP.
     """
+    empty = {"is_proxy": False, "country": "", "risk": None, "summary": "unknown"}
     if not ip:
-        return "unknown"
+        return empty
 
     with _ip_reputation_lock:
         if ip in _ip_reputation_cache:
@@ -306,17 +307,54 @@ def check_ip_reputation(ip):
         data = r.json()
         info = data.get(ip, {})
         is_proxy = info.get("proxy") == "yes"
-        ip_type = info.get("type", "")
-        if is_proxy:
-            result = f"VPN/датацентр ({ip_type})" if ip_type else "VPN/датацентр"
-        else:
-            result = f"чистый ({ip_type})" if ip_type else "чистый"
+        ip_type = info.get("type", "") or ""
+        country = info.get("country", "") or ""
+        risk = info.get("risk")
+        try:
+            risk = int(risk) if risk is not None else None
+        except (TypeError, ValueError):
+            risk = None
+
+        label = f"VPN/датацентр ({ip_type})" if is_proxy else (f"чистый ({ip_type})" if ip_type else "чистый")
+        if country:
+            label += f", {country}"
+        if risk is not None:
+            label += f", risk {risk}"
+
+        result = {"is_proxy": is_proxy, "country": country, "risk": risk, "summary": label}
     except Exception:
-        result = "unknown"
+        result = empty
 
     with _ip_reputation_lock:
         _ip_reputation_cache[ip] = result
     return result
+
+
+def normalize_country(s):
+    s = (s or "").strip().lower()
+    if s.startswith("the "):
+        s = s[4:]
+    return s
+
+
+def has_flag_emoji(name):
+    """Проверяет, начинается ли имя с флага-эмодзи (два Regional Indicator Symbol подряд)."""
+    if not name or len(name) < 2:
+        return False
+    cp0, cp1 = ord(name[0]), ord(name[1])
+    return 0x1F1E6 <= cp0 <= 0x1F1FF and 0x1F1E6 <= cp1 <= 0x1F1FF
+
+
+def extract_label_country(name):
+    """
+    Достаёт название страны из имени конфига (например '🇸🇪 Sweden — #267' -> 'Sweden').
+    Возвращает пустую строку, если в имени нет явного флага — чтобы не путать
+    страну с произвольным текстом вроде '@FarazV2ray'.
+    """
+    if not has_flag_emoji(name):
+        return ""
+    m = re.search(r"([A-Za-z][A-Za-z .]+)", name or "")
+    return m.group(1).strip() if m else ""
 
 
 def extract_name(uri):
@@ -472,11 +510,27 @@ def test_one(uri, xray_path, targets):
 
         # Шаг 2: репутация IP (для Gemini — блокировка по стране у него ловится
         # только у залогиненного аккаунта, поэтому вместо анонимной проверки
-        # смотрим, не помечен ли сам IP как VPN/датацентр).
-        result["ip_reputation"] = check_ip_reputation(result.get("external_ip", ""))
-        result["gemini"] = (
-            "вероятно OK" if result["ip_reputation"].startswith("чистый") else "вероятно BLOCKED"
+        # смотрим репутацию самого IP: не VPN/датацентр ли это, не завышен ли
+        # risk-score, и совпадает ли реальная страна с той, что заявлена в
+        # названии конфига — у мобильных/wireless IP геолокация часто врёт).
+        reputation = check_ip_reputation(result.get("external_ip", ""))
+        summary = reputation["summary"]
+
+        label_country = normalize_country(extract_label_country(result.get("name", "")))
+        real_country = normalize_country(reputation.get("country", ""))
+        country_mismatch = bool(label_country and real_country and label_country not in real_country and real_country not in label_country)
+        if country_mismatch:
+            summary += f" [метка: {result.get('name', '').strip()!r} ≠ реальная страна]"
+
+        result["ip_reputation"] = summary
+
+        risk = reputation.get("risk")
+        looks_clean = (
+            not reputation["is_proxy"]
+            and not country_mismatch
+            and (risk is None or risk < 50)
         )
+        result["gemini"] = "вероятно OK" if looks_clean else "вероятно BLOCKED"
 
         # Шаг 3: сервер живой — проверяем реальную доступность сервисов через браузер.
         browser = get_browser()
