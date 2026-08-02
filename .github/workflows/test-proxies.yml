@@ -39,7 +39,10 @@ jobs:
           chmod +x xray-bin/xray
 
       - name: Install Python dependencies
-        run: pip install "requests[socks]"
+        run: |
+          pip install "requests[socks]"
+          pip install playwright
+          playwright install --with-deps chromium
 
       - name: Download configs list
         run: |
