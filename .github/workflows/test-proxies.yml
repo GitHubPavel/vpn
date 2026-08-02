@@ -1,27 +1,23 @@
 name: Test VPN Proxies
 
 # Запускается вручную — кнопкой "Run workflow" (в вебе или в приложении GitHub Mobile)
-# При запуске нужно выбрать источник конфигов из списка (или вставить свою ссылку).
+# Перед запуском можно выбрать источник конфигов.
 on:
   workflow_dispatch:
     inputs:
       source:
         description: "Источник списка конфигов"
         required: true
-        default: "sub1"
+        default: "vless_universal"
         type: choice
         options:
-          - sub1
           - vless_universal
-          - custom_url
-      custom_url:
-        description: "Своя ссылка (используется, только если source = custom_url)"
-        required: false
-        default: ""
+          - sub1
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -40,29 +36,28 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install "requests[socks]"
-          pip install playwright
+          pip install "requests[socks]" playwright
           playwright install --with-deps chromium
 
-      - name: Download configs list
+      - name: Resolve source URL
+        id: source
         run: |
           case "${{ inputs.source }}" in
-            sub1)
-              URL="https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt"
-              ;;
             vless_universal)
-              URL="https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+              echo "url=https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt" >> "$GITHUB_OUTPUT"
               ;;
-            custom_url)
-              URL="${{ inputs.custom_url }}"
+            sub1)
+              echo "url=https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt" >> "$GITHUB_OUTPUT"
               ;;
           esac
-          echo "Скачиваю: $URL"
-          curl -L -o configs.txt "$URL"
-          echo "Строк в файле: $(wc -l < configs.txt)"
 
       - name: Run proxy tests
-        run: python proxy_tester.py configs.txt --xray "$(pwd)/xray-bin/xray" --out results.csv
+        env:
+          SUB_URL: ${{ steps.source.outputs.url }}
+        run: python proxy_tester.py --sub-url "$SUB_URL" --xray "$(pwd)/xray-bin/xray" --out results.csv --workers 10
+
+      - name: Write summary
+        run: python generate_summary.py results.csv >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
         uses: actions/upload-artifact@v4
