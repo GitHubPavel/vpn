@@ -1,13 +1,27 @@
 name: Test VPN Proxies
 
 # Запускается вручную — кнопкой "Run workflow" (в вебе или в приложении GitHub Mobile)
+# При запуске нужно выбрать источник конфигов из списка (или вставить свою ссылку).
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Источник списка конфигов"
+        required: true
+        default: "sub1"
+        type: choice
+        options:
+          - sub1
+          - vless_universal
+          - custom_url
+      custom_url:
+        description: "Своя ссылка (используется, только если source = custom_url)"
+        required: false
+        default: ""
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -25,17 +39,27 @@ jobs:
           chmod +x xray-bin/xray
 
       - name: Install Python dependencies
+        run: pip install "requests[socks]"
+
+      - name: Download configs list
         run: |
-          pip install "requests[socks]" playwright
-          playwright install --with-deps chromium
+          case "${{ inputs.source }}" in
+            sub1)
+              URL="https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub1.txt"
+              ;;
+            vless_universal)
+              URL="https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+              ;;
+            custom_url)
+              URL="${{ inputs.custom_url }}"
+              ;;
+          esac
+          echo "Скачиваю: $URL"
+          curl -L -o configs.txt "$URL"
+          echo "Строк в файле: $(wc -l < configs.txt)"
 
       - name: Run proxy tests
-        env:
-          SUB_URL: https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt
-        run: python proxy_tester.py --sub-url "$SUB_URL" --xray "$(pwd)/xray-bin/xray" --out results.csv --workers 10
-
-      - name: Write summary
-        run: python generate_summary.py results.csv >> "$GITHUB_STEP_SUMMARY"
+        run: python proxy_tester.py configs.txt --xray "$(pwd)/xray-bin/xray" --out results.csv
 
       - name: Upload results
         uses: actions/upload-artifact@v4
