@@ -463,7 +463,7 @@ def check_service(browser, socks_port, url, block_phrases):
 
 
 def test_one(uri, xray_path, targets):
-    result = {"uri": uri[:70], "_full_uri": uri, "name": extract_name(uri), "error": ""}
+    result = {"uri": uri[:70], "_full_uri": uri, "full_uri": uri, "name": extract_name(uri), "error": ""}
     outbound = None
     try:
         outbound = parse_uri(uri)
@@ -678,7 +678,7 @@ def main():
 
     rows.sort(key=final_key)
 
-    fieldnames = ["name", "uri", "external_ip", "ip_check", "ip_reputation", "claude", "chatgpt", "gemini", "recheck", "error"]
+    fieldnames = ["name", "uri", "full_uri", "external_ip", "ip_check", "ip_reputation", "claude", "chatgpt", "gemini", "recheck", "error"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
