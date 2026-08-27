@@ -31,10 +31,18 @@ out_list_path = sys.argv[2] if len(sys.argv) > 2 else "winners.txt"
 out_sub_path = sys.argv[3] if len(sys.argv) > 3 else "winners_sub.txt"
 
 
-def is_ok(row):
+def is_full_ok(row):
+    return (
+        str(row.get("claude", "")).startswith("OK")
+        and str(row.get("chatgpt", "")).startswith("OK")
+        and str(row.get("gemini", "")).startswith("OK")
+    )
+
+
+def is_partial_ok(row):
     claude_ok = str(row.get("claude", "")).startswith("OK")
     chatgpt_ok = str(row.get("chatgpt", "")).startswith("OK")
-    gemini_ok = row.get("gemini") == "вероятно OK"
+    gemini_ok = str(row.get("gemini", "")).startswith("OK")
     return claude_ok or chatgpt_ok or gemini_ok
 
 
@@ -48,10 +56,20 @@ def main():
 
     winners = []
     for r in rows:
-        if r.get("full_uri") and is_ok(r) and recheck_alive(r):
+        if r.get("full_uri") and is_full_ok(r) and recheck_alive(r):
             winners.append(r)
         if len(winners) >= TOP_N:
             break
+
+    if len(winners) < TOP_N:
+        already = {id(w) for w in winners}
+        for r in rows:
+            if id(r) in already:
+                continue
+            if r.get("full_uri") and is_partial_ok(r) and recheck_alive(r):
+                winners.append(r)
+            if len(winners) >= TOP_N:
+                break
 
     if not winners:
         print("Рабочих конфигов не найдено — файлы не обновлены.")

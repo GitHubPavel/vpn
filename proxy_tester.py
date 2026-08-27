@@ -73,12 +73,16 @@ DEFAULT_TARGETS = {
     "ip_check": "https://api.ipify.org?format=json",
     "claude": "https://claude.ai",
     "chatgpt": "https://chat.openai.com",
+    "gemini": "https://gemini.google.com/app",
 }
 
-# gemini.google.com проверяется отдельно, через репутацию IP (см. IP_REPUTATION_URL) —
-# блокировка по стране у Gemini срабатывает только у залогиненного аккаунта при
-# отправке сообщения, поэтому анонимная проверка браузером её не ловит и вводит
-# в заблуждение (показывает "доступно", хотя реально нет).
+# Раньше Gemini проверялся отдельно, через репутацию IP — считалось, что
+# блокировка по стране срабатывает только у залогиненного аккаунта при
+# отправке сообщения. Начиная с марта 2025 Google открыл гостевой доступ
+# к gemini.google.com без аккаунта (см. официальную справку Google:
+# support.google.com/gemini/answer/13278668), и блокировка по стране
+# показывается анонимному посетителю прямо на странице — значит, можно
+# проверять по-настоящему, как claude.ai и chat.openai.com.
 IP_REPUTATION_URL = "http://proxycheck.io/v2/{ip}?vpn=1&asn=1&risk=1"
 
 # Проверенные фразы, которыми claude.ai / chat.openai.com сообщают о региональной
@@ -95,6 +99,13 @@ BLOCK_PHRASES = {
     "chatgpt": [
         "not available in your country",
         "is not available in your country",
+    ],
+    "gemini": [
+        "isn't available in your country",
+        "is not available in your country",
+        "isn't currently supported in your country",
+        "not currently supported in your country",
+        "not available in your region",
     ],
 }
 
@@ -526,11 +537,10 @@ def test_one(uri, xray_path, targets):
             result["gemini"] = "SKIP"
             return result
 
-        # Шаг 2: репутация IP (для Gemini — блокировка по стране у него ловится
-        # только у залогиненного аккаунта, поэтому вместо анонимной проверки
-        # смотрим репутацию самого IP: не VPN/датацентр ли это, не завышен ли
-        # risk-score, и совпадает ли реальная страна с той, что заявлена в
-        # названии конфига — у мобильных/wireless IP геолокация часто врёт).
+        # Шаг 2: репутация IP — оставляем как справочную колонку (VPN/датацентр,
+        # risk-score, совпадение реальной страны с меткой в имени конфига), но
+        # решение по Gemini теперь принимается не по ней, а по реальному ответу
+        # страницы (см. шаг 3) — так же, как для Claude и ChatGPT.
         reputation = check_ip_reputation(result.get("external_ip", ""))
         summary = reputation["summary"]
 
@@ -542,15 +552,8 @@ def test_one(uri, xray_path, targets):
 
         result["ip_reputation"] = summary
 
-        risk = reputation.get("risk")
-        looks_clean = (
-            not reputation["is_proxy"]
-            and not country_mismatch
-            and (risk is None or risk < 50)
-        )
-        result["gemini"] = "вероятно OK" if looks_clean else "вероятно BLOCKED"
-
-        # Шаг 3: сервер живой — проверяем реальную доступность сервисов через браузер.
+        # Шаг 3: сервер живой — проверяем реальную доступность сервисов через браузер
+        # (claude, chatgpt, gemini — все три теперь одинаково честно, без догадок).
         browser = get_browser()
         for name, url in targets.items():
             if name == "ip_check":
@@ -583,7 +586,7 @@ def _latency(value):
 def sort_key(row):
     claude_ok = str(row.get("claude", "")).startswith("OK")
     chatgpt_ok = str(row.get("chatgpt", "")).startswith("OK")
-    gemini_ok = str(row.get("gemini", "")) == "вероятно OK"
+    gemini_ok = str(row.get("gemini", "")).startswith("OK")
     ip_ok = str(row.get("ip_check", "")).startswith("OK")
 
     ok_count = sum([claude_ok, chatgpt_ok, gemini_ok])
@@ -600,6 +603,7 @@ def sort_key(row):
     avg_latency = min(
         _latency(row.get("claude", "")),
         _latency(row.get("chatgpt", "")),
+        _latency(row.get("gemini", "")),
     )
     return (rank, -ok_count, avg_latency)
 
