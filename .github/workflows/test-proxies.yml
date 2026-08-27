@@ -62,23 +62,23 @@ jobs:
       - name: Write summary
         run: python generate_summary.py results.csv >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Extract winning config
-        run: python extract_winner.py results.csv winner.txt
+      - name: Extract winning configs (top 5)
+        run: python extract_winner.py results.csv winners.txt winners_sub.txt
 
-      - name: Publish winner.txt
+      - name: Publish winners files
         run: |
-          if [ -s winner.txt ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add winner.txt
-            if ! git diff --staged --quiet; then
-              git commit -m "Update winner config [skip ci]"
-              git push
-            else
-              echo "winner.txt не изменился — коммит не нужен"
-            fi
+          if [ ! -s winners.txt ] || [ ! -s winners_sub.txt ]; then
+            echo "Рабочих конфигов нет — файлы не созданы, коммит пропущен"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add winners.txt winners_sub.txt
+          if ! git diff --staged --quiet; then
+            git commit -m "Update top-5 winner configs [skip ci]"
+            git push
           else
-            echo "winner.txt пустой или не создан — пропускаю коммит"
+            echo "Файлы не изменились — коммит не нужен"
           fi
 
       - name: Upload results
