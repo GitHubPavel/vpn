@@ -24,7 +24,7 @@ import base64
 import csv
 import sys
 
-TOP_N = 5
+TOP_N = 10
 
 path = sys.argv[1] if len(sys.argv) > 1 else "results.csv"
 out_list_path = sys.argv[2] if len(sys.argv) > 2 else "winners.txt"
