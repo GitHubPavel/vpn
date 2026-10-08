@@ -1,10 +1,4 @@
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4dG1udlg1ell1V0dWSURQMmpnbFp3@5.78.51.123:1080#12
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4dG1udlg1ell1V0dWSURQMmpnbFp3@5.78.51.123:1080#@fastkanfig 5
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4dG1udlg1ell1V0dWSURQMmpnbFp3@5.78.51.123:1080#🇺🇸 Join+Telegram:@Farah_VPN 🇺🇸
-vless://d65cc14c-f53f-4fe2-b262-97856601319c@169.40.42.225:443?security=reality&encryption=none&pbk=e2RLf57Li_-MDZGE9ss1BWPgP54mqRb5PfXhW2jcVVg&headerType=none&fp=ios&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&sid=c39cc7310a#%F0%9F%87%AB%F0%9F%87%AEtelegram%E2%9E%A0%40v2rayNG_Matsuri
-vless://d65cc14c-f53f-4fe2-b262-97856601319c@169.40.42.133:443?encryption=none&flow=xtls-rprx-vision&fp=&pbk=e2RLf57Li_-MDZGE9ss1BWPgP54mqRb5PfXhW2jcVVg&security=reality&sid=c39cc7310a&sni=yahoo.com&type=tcp#%F0%9F%94%9696@oneclickvpnkeys
-vless://d65cc14c-f53f-4fe2-b262-97856601319c@169.40.42.133:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=yahoo.com&fp=ios&pbk=e2RLf57Li_-MDZGE9ss1BWPgP54mqRb5PfXhW2jcVVg&sid=c39cc7310a&packetEncoding=xudp#@ConfigYab_AUTO
-vless://d65cc14c-f53f-4fe2-b262-97856601319c@169.40.42.15:443?encryption=none&flow=xtls-rprx-vision&fp=&pbk=e2RLf57Li_-MDZGE9ss1BWPgP54mqRb5PfXhW2jcVVg&security=reality&sid=c39cc7310a&sni=yahoo.com&type=tcp#%F0%9F%91%81%EF%B8%8F%E2%80%8D%F0%9F%97%A8%EF%B8%8F81@oneclickvpnkeys
-vless://d65cc14c-f53f-4fe2-b262-97856601319c@169.40.42.15:443?security=reality&encryption=none&pbk=e2RLf57Li_-MDZGE9ss1BWPgP54mqRb5PfXhW2jcVVg&headerType=none&fp=firefox&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&sid=c39cc7310a#%D8%A7%DA%AF%D9%87%20%D9%85%DB%8C%D8%AE%D9%88%D8%A7%DB%8C%20%D9%82%D8%B7%D8%B9%20%D9%86%D8%B4%DB%8C%20%D8%AC%D9%88%DB%8C%D9%86%20%D8%B4%D9%88%20%3A%20%40farsiproxy
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpRQ1hEeHVEbFRUTUQ3anRnSFVqSW9q@193.29.139.212:8080#@hex_proxy ⁴
-ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpRQ1hEeHVEbFRUTUQ3anRnSFVqSW9q@193.29.139.212:8080#@hex_proxy ⁶
+vless://633f424e-2b11-48da-a6b3-a849dd71456f@45.12.75.242:26424?encryption=none&fp=chrome&pbk=l8AubqcxQO-HRFJy4pZL1vbLOo-eXit69s-XulSELE0&security=reality&sid=23103e1e&sni=ya.ru&type=raw#%F0%9F%87%B7%F0%9F%87%BA%20Beget%20%E2%80%94%20%2314
+vless://633f424e-2b11-48da-a6b3-a849dd71456f@45.12.75.242:26424?encryption=none&fp=firefox&pbk=l8AubqcxQO-HRFJy4pZL1vbLOo-eXit69s-XulSELE0&security=reality&sid=23103e1e&sni=ya.ru&type=raw#%F0%9F%87%B7%F0%9F%87%BA%20Beget%20%E2%80%94%20%2317
+vless://633f424e-2b11-48da-a6b3-a849dd71456f@45.12.75.242:26424?encryption=none&pbk=l8AubqcxQO-HRFJy4pZL1vbLOo-eXit69s-XulSELE0&security=reality&sid=23103e1e&sni=ya.ru&type=raw#%F0%9F%87%B7%F0%9F%87%BA%20Beget%20%E2%80%94%20%2316
+vless://633f424e-2b11-48da-a6b3-a849dd71456f@45.12.75.242:26424?encryption=none&fp=qq&pbk=l8AubqcxQO-HRFJy4pZL1vbLOo-eXit69s-XulSELE0&security=reality&sid=23103e1e&sni=ya.ru&type=raw#%F0%9F%87%B7%F0%9F%87%BA%20Beget%20%E2%80%94%20%2315
